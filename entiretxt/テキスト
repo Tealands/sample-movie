@@ -1,0 +1,165 @@
+```python
+import bpy
+import math
+from mathutils import Vector
+
+# =========================================
+# 設定
+# =========================================
+light_name = "Light"      # 太陽に相当する光源
+camera_name = "Camera"
+earth_name = "Earth"
+
+# ---- アニメーション設定 ----
+start_frame = 1
+end_frame = 7305                  # 総フレーム数
+frames_per_orbit = 5              # 地球が5フレームで1周
+
+# ---- モデル設定 ----
+earth_radius = 1.0                # 地球半径
+orbit_radius = 8.0                # 地球の公転半径（太陽からの距離）
+camera_surface_offset = 0.05      # 地表からどれだけ浮かせるか
+camera_lat_deg = 0.0              # カメラの緯度（度）
+camera_lon_deg = 0.0              # カメラの経度（度）
+earth_spin_per_orbit = 1.0        # 地球の自転回数 / 1公転（1.0なら1公転で1回自転）
+
+# 地球の公転面：XZ平面（Y=0）
+# 太陽は原点固定
+
+# =========================================
+# オブジェクト取得
+# =========================================
+light = bpy.data.objects.get(light_name)
+camera = bpy.data.objects.get(camera_name)
+
+if light is None:
+    raise ValueError(f"'{light_name}' が見つかりません。")
+if camera is None:
+    raise ValueError(f"'{camera_name}' が見つかりません。")
+
+# =========================================
+# 地球オブジェクト作成または再利用
+# =========================================
+earth = bpy.data.objects.get(earth_name)
+
+if earth is None:
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        radius=earth_radius,
+        location=(orbit_radius, 0, 0)
+    )
+    earth = bpy.context.object
+    earth.name = earth_name
+else:
+    earth.location = (orbit_radius, 0, 0)
+    earth.scale = (1, 1, 1)
+
+# 球の半径を合わせる
+# 既存オブジェクトのスケールが残っている可能性を避けるため、
+# 半径 earth_radius の球として扱えるように一旦 scale=1 にしておく
+earth.scale = (1, 1, 1)
+
+# =========================================
+# 太陽（Light）を原点に固定
+# =========================================
+light.location = (0.0, 0.0, 0.0)
+
+# 既存キーフレームを消したい場合はコメント解除
+# if light.animation_data and light.animation_data.action:
+#     light.animation_data.action.fcurves.clear()
+
+light.keyframe_insert(data_path="location", frame=start_frame)
+
+# =========================================
+# カメラを地球表面に固定するためのローカル位置を作る
+# 緯度・経度から、地球ローカル座標系での位置ベクトルを作る
+#   X = cos(lat) cos(lon)
+#   Y = sin(lat)
+#   Z = cos(lat) sin(lon)
+# =========================================
+lat = math.radians(camera_lat_deg)
+lon = math.radians(camera_lon_deg)
+
+camera_local_dir = Vector((
+    math.cos(lat) * math.cos(lon),
+    math.sin(lat),
+    math.cos(lat) * math.sin(lon)
+)).normalized()
+
+camera_local_pos = camera_local_dir * (earth_radius + camera_surface_offset)
+
+# =========================================
+# アニメーション前に既存キーフレームを削除したい場合
+# （必要なら使ってください）
+# =========================================
+def clear_animation(obj):
+    if obj.animation_data and obj.animation_data.action:
+        obj.animation_data.action.fcurves.clear()
+
+# 必要ならコメント解除
+# clear_animation(earth)
+# clear_animation(camera)
+
+# =========================================
+# フレームごとに
+# 1. 地球を太陽のまわりに等速円運動させる
+# 2. 地球を自転させる
+# 3. カメラを地球表面に追従させる
+# 4. カメラを地球中心（真下）へ向ける
+# =========================================
+total_frames = end_frame - start_frame
+
+for frame in range(start_frame, end_frame + 1):
+    # 開始フレームを0として扱うための相対フレーム
+    f = frame - start_frame
+
+    # -------------------------------------
+    # 地球の公転角
+    # 5フレームで1周 -> angle = 2π * f / 5
+    # -------------------------------------
+    orbit_theta = 2.0 * math.pi * (f / frames_per_orbit)
+
+    # XZ平面上を等速円運動
+    earth_pos = Vector((
+        orbit_radius * math.cos(orbit_theta),  # x
+        0.0,                                   # y
+        orbit_radius * math.sin(orbit_theta)   # z
+    ))
+    earth.location = earth_pos
+
+    # -------------------------------------
+    # 地球の自転
+    # earth_spin_per_orbit = 1.0 なら
+    # 1公転ごとに地球が1回転
+    # 自転軸はY軸とする
+    # -------------------------------------
+    spin_theta = earth_spin_per_orbit * orbit_theta
+    earth.rotation_euler = (0.0, spin_theta, 0.0)
+
+    # -------------------------------------
+    # 地球表面に固定されたカメラ位置
+    # 地球の自転を反映させるため、
+    # camera_local_pos を地球の回転で回してから
+    # 地球の位置に足す
+    # -------------------------------------
+    rot_mat = earth.rotation_euler.to_matrix().to_4x4()
+    rotated_local_pos = rot_mat @ camera_local_pos
+    camera.location = earth.location + rotated_local_pos
+
+    # -------------------------------------
+    # カメラの向き：
+    # 地球表面から地球中心を見る（真下を見る）
+    # -------------------------------------
+    view_direction = (earth.location - camera.location).normalized()
+    camera.rotation_euler = view_direction.to_track_quat('-Z', 'Y').to_euler()
+
+    # -------------------------------------
+    # キーフレーム挿入
+    # -------------------------------------
+    earth.keyframe_insert(data_path="location", frame=frame)
+    earth.keyframe_insert(data_path="rotation_euler", frame=frame)
+
+    camera.keyframe_insert(data_path="location", frame=frame)
+    camera.keyframe_insert(data_path="rotation_euler", frame=frame)
+
+print("太陽中心モデルを作成しました。地球は等速円運動し、カメラは地球表面に固定されています。")
+```

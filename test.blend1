@@ -1,0 +1,47 @@
+import bpy
+import math
+from mathutils import Vector
+
+camera = bpy.data.objects.get("Camera")
+
+if camera:
+
+    if camera.animation_data:
+        camera.animation_data_clear()
+
+    total_frames = 240
+
+    start_radius = 10.0
+    end_radius = 3.0
+
+    target = Vector((0, 0, 0))
+
+    for frame in range(1, total_frames + 1):
+
+        bpy.context.scene.frame_set(frame)
+
+        progress = frame / total_frames
+
+        # 半径を徐々に縮小
+        radius = start_radius + (end_radius - start_radius) * progress
+
+        # 原点の周りを1周
+        theta = 2 * math.pi * progress
+
+        camera.location = (
+            radius * math.cos(theta),
+            radius * math.sin(theta),
+            2.0
+        )
+
+        # 原点を向く
+        direction = target - camera.location
+        camera.rotation_euler = (
+            direction.to_track_quat('-Z', 'Y')
+            .to_euler()
+        )
+
+        camera.keyframe_insert(data_path="location")
+        camera.keyframe_insert(data_path="rotation_euler")
+
+    print("カメラの周回＋接近アニメーション作成完了")
